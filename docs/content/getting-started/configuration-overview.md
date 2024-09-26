@@ -79,17 +79,19 @@ traefik --help
 # or
 
 docker run traefik[:version] --help
-# ex: docker run traefik:v2.8 --help
+# ex: docker run traefik:v3.1 --help
 ```
 
-All available arguments can also be found [here](../reference/static-configuration/cli.md).
+Check the [CLI reference](../reference/static-configuration/cli.md "Link to CLI reference overview") for an overview about all available arguments.
 
 ### Environment Variables
 
-All available environment variables can be found [here](../reference/static-configuration/env.md)
+All available environment variables can be found in the [static configuration environment overview](../reference/static-configuration/env.md).
 
 ## Available Configuration Options
 
 All the configuration options are documented in their related section.
 
 You can browse the available features in the menu, the [providers](../providers/overview.md), or the [routing section](../routing/overview.md) to see them in action.
+
+{!traefik-for-business-applications.md!}

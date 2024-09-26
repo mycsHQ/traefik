@@ -5,6 +5,8 @@ import (
 	"strings"
 
 	"github.com/vulcand/predicate"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/language"
 )
 
 const (
@@ -29,7 +31,6 @@ func NewParser(matchers []string) (predicate.Parser, error) {
 	parserFuncs := make(map[string]interface{})
 
 	for _, matcherName := range matchers {
-		matcherName := matcherName
 		fn := func(value ...string) TreeBuilder {
 			return func() *Tree {
 				return &Tree{
@@ -41,7 +42,7 @@ func NewParser(matchers []string) (predicate.Parser, error) {
 		parserFuncs[matcherName] = fn
 		parserFuncs[strings.ToLower(matcherName)] = fn
 		parserFuncs[strings.ToUpper(matcherName)] = fn
-		parserFuncs[strings.Title(strings.ToLower(matcherName))] = fn
+		parserFuncs[cases.Title(language.Und).String(strings.ToLower(matcherName))] = fn
 	}
 
 	return predicate.NewParser(predicate.Def{

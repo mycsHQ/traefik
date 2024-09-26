@@ -2,6 +2,7 @@ package nomad
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"text/template"
@@ -9,14 +10,15 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/hashicorp/nomad/api"
+	"github.com/rs/zerolog/log"
 	ptypes "github.com/traefik/paerser/types"
-	"github.com/traefik/traefik/v2/pkg/config/dynamic"
-	"github.com/traefik/traefik/v2/pkg/job"
-	"github.com/traefik/traefik/v2/pkg/log"
-	"github.com/traefik/traefik/v2/pkg/provider"
-	"github.com/traefik/traefik/v2/pkg/provider/constraints"
-	"github.com/traefik/traefik/v2/pkg/safe"
-	"github.com/traefik/traefik/v2/pkg/types"
+	"github.com/traefik/traefik/v3/pkg/config/dynamic"
+	"github.com/traefik/traefik/v3/pkg/job"
+	"github.com/traefik/traefik/v3/pkg/logs"
+	"github.com/traefik/traefik/v3/pkg/provider"
+	"github.com/traefik/traefik/v3/pkg/provider/constraints"
+	"github.com/traefik/traefik/v3/pkg/safe"
+	"github.com/traefik/traefik/v3/pkg/types"
 )
 
 const (
@@ -46,25 +48,82 @@ type item struct {
 	ExtraConf configuration // global options
 }
 
-// Provider holds configurations of the provider.
-type Provider struct {
-	DefaultRule      string          `description:"Default rule." json:"defaultRule,omitempty" toml:"defaultRule,omitempty" yaml:"defaultRule,omitempty"`
-	Constraints      string          `description:"Constraints is an expression that Traefik matches against the Nomad service's tags to determine whether to create route(s) for that service." json:"constraints,omitempty" toml:"constraints,omitempty" yaml:"constraints,omitempty" export:"true"`
-	Endpoint         *EndpointConfig `description:"Nomad endpoint settings" json:"endpoint,omitempty" toml:"endpoint,omitempty" yaml:"endpoint,omitempty" export:"true"`
-	Prefix           string          `description:"Prefix for nomad service tags." json:"prefix,omitempty" toml:"prefix,omitempty" yaml:"prefix,omitempty" export:"true"`
-	Stale            bool            `description:"Use stale consistency for catalog reads." json:"stale,omitempty" toml:"stale,omitempty" yaml:"stale,omitempty" export:"true"`
-	Namespace        string          `description:"Sets the Nomad namespace used to discover services." json:"namespace,omitempty" toml:"namespace,omitempty" yaml:"namespace,omitempty" export:"true"`
-	ExposedByDefault bool            `description:"Expose Nomad services by default." json:"exposedByDefault,omitempty" toml:"exposedByDefault,omitempty" yaml:"exposedByDefault,omitempty" export:"true"`
-	RefreshInterval  ptypes.Duration `description:"Interval for polling Nomad API." json:"refreshInterval,omitempty" toml:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty" export:"true"`
+// configuration contains information from the service's tags that are globals
+// (not specific to the dynamic configuration).
+type configuration struct {
+	Enable bool // <prefix>.enable is the corresponding label.
+	Canary bool // <prefix>.nomad.canary is the corresponding label.
+}
 
-	client         *api.Client        // client for Nomad API
-	defaultRuleTpl *template.Template // default routing rule
+// ProviderBuilder is responsible for constructing namespaced instances of the Nomad provider.
+type ProviderBuilder struct {
+	Configuration `yaml:",inline" export:"true"`
+
+	Namespaces []string `description:"Sets the Nomad namespaces used to discover services." json:"namespaces,omitempty" toml:"namespaces,omitempty" yaml:"namespaces,omitempty"`
+}
+
+// BuildProviders builds Nomad provider instances for the given namespaces configuration.
+func (p *ProviderBuilder) BuildProviders() []*Provider {
+	if len(p.Namespaces) == 0 {
+		return []*Provider{{
+			Configuration: p.Configuration,
+			name:          providerName,
+		}}
+	}
+
+	var providers []*Provider
+	for _, namespace := range p.Namespaces {
+		providers = append(providers, &Provider{
+			Configuration: p.Configuration,
+			name:          providerName + "-" + namespace,
+			namespace:     namespace,
+		})
+	}
+
+	return providers
+}
+
+// Configuration represents the Nomad provider configuration.
+type Configuration struct {
+	DefaultRule        string          `description:"Default rule." json:"defaultRule,omitempty" toml:"defaultRule,omitempty" yaml:"defaultRule,omitempty"`
+	Constraints        string          `description:"Constraints is an expression that Traefik matches against the Nomad service's tags to determine whether to create route(s) for that service." json:"constraints,omitempty" toml:"constraints,omitempty" yaml:"constraints,omitempty" export:"true"`
+	Endpoint           *EndpointConfig `description:"Nomad endpoint settings" json:"endpoint,omitempty" toml:"endpoint,omitempty" yaml:"endpoint,omitempty" export:"true"`
+	Prefix             string          `description:"Prefix for nomad service tags." json:"prefix,omitempty" toml:"prefix,omitempty" yaml:"prefix,omitempty" export:"true"`
+	Stale              bool            `description:"Use stale consistency for catalog reads." json:"stale,omitempty" toml:"stale,omitempty" yaml:"stale,omitempty" export:"true"`
+	ExposedByDefault   bool            `description:"Expose Nomad services by default." json:"exposedByDefault,omitempty" toml:"exposedByDefault,omitempty" yaml:"exposedByDefault,omitempty" export:"true"`
+	RefreshInterval    ptypes.Duration `description:"Interval for polling Nomad API." json:"refreshInterval,omitempty" toml:"refreshInterval,omitempty" yaml:"refreshInterval,omitempty" export:"true"`
+	AllowEmptyServices bool            `description:"Allow the creation of services without endpoints." json:"allowEmptyServices,omitempty" toml:"allowEmptyServices,omitempty" yaml:"allowEmptyServices,omitempty" export:"true"`
+}
+
+// SetDefaults sets the default values for the Nomad Traefik Provider Configuration.
+func (c *Configuration) SetDefaults() {
+	defConfig := api.DefaultConfig()
+	c.Endpoint = &EndpointConfig{
+		Address: defConfig.Address,
+		Region:  defConfig.Region,
+		Token:   defConfig.SecretID,
+	}
+
+	if defConfig.TLSConfig != nil && (defConfig.TLSConfig.Insecure || defConfig.TLSConfig.CACert != "" || defConfig.TLSConfig.ClientCert != "" || defConfig.TLSConfig.ClientKey != "") {
+		c.Endpoint.TLS = &types.ClientTLS{
+			CA:                 defConfig.TLSConfig.CACert,
+			Cert:               defConfig.TLSConfig.ClientCert,
+			Key:                defConfig.TLSConfig.ClientKey,
+			InsecureSkipVerify: defConfig.TLSConfig.Insecure,
+		}
+	}
+
+	c.Prefix = defaultPrefix
+	c.ExposedByDefault = true
+	c.RefreshInterval = ptypes.Duration(15 * time.Second)
+	c.DefaultRule = defaultTemplateRule
+	c.AllowEmptyServices = false
 }
 
 type EndpointConfig struct {
-	// Address is the Nomad endpoint address, if empty it defaults to NOMAD_ADDR or "http://localhost:4646".
+	// Address is the Nomad endpoint address, if empty it defaults to NOMAD_ADDR or "http://127.0.0.1:4646".
 	Address string `description:"The address of the Nomad server, including scheme and port." json:"address,omitempty" toml:"address,omitempty" yaml:"address,omitempty"`
-	// Region is the Nomad region, if empty it defaults to NOMAD_REGION or "global".
+	// Region is the Nomad region, if empty it defaults to NOMAD_REGION.
 	Region string `description:"Nomad region to use. If not provided, the local agent region is used." json:"region,omitempty" toml:"region,omitempty" yaml:"region,omitempty"`
 	// Token is the ACL token to connect with Nomad, if empty it defaults to NOMAD_TOKEN.
 	Token            string           `description:"Token is used to provide a per-request ACL token." json:"token,omitempty" toml:"token,omitempty" yaml:"token,omitempty" loggable:"false"`
@@ -72,22 +131,38 @@ type EndpointConfig struct {
 	EndpointWaitTime ptypes.Duration  `description:"WaitTime limits how long a Watch will block. If not provided, the agent default values will be used" json:"endpointWaitTime,omitempty" toml:"endpointWaitTime,omitempty" yaml:"endpointWaitTime,omitempty" export:"true"`
 }
 
+// Provider holds configuration along with the namespace it will discover services in.
+type Provider struct {
+	Configuration
+
+	name           string
+	namespace      string
+	client         *api.Client        // client for Nomad API
+	defaultRuleTpl *template.Template // default routing rule
+}
+
 // SetDefaults sets the default values for the Nomad Traefik Provider.
 func (p *Provider) SetDefaults() {
-	p.Endpoint = &EndpointConfig{}
-	p.Prefix = defaultPrefix
-	p.ExposedByDefault = true
-	p.RefreshInterval = ptypes.Duration(15 * time.Second)
-	p.DefaultRule = defaultTemplateRule
+	p.Configuration.SetDefaults()
 }
 
 // Init the Nomad Traefik Provider.
 func (p *Provider) Init() error {
+	if p.namespace == api.AllNamespacesNamespace {
+		return errors.New("wildcard namespace not supported")
+	}
+
 	defaultRuleTpl, err := provider.MakeDefaultRuleTemplate(p.DefaultRule, nil)
 	if err != nil {
 		return fmt.Errorf("error while parsing default rule: %w", err)
 	}
 	p.defaultRuleTpl = defaultRuleTpl
+
+	// In case they didn't initialize Provider with BuildProviders
+	if p.name == "" {
+		p.name = providerName
+	}
+
 	return nil
 }
 
@@ -95,14 +170,14 @@ func (p *Provider) Init() error {
 // using the given configuration channel.
 func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.Pool) error {
 	var err error
-	p.client, err = createClient(p.Namespace, p.Endpoint)
+	p.client, err = createClient(p.namespace, p.Endpoint)
 	if err != nil {
 		return fmt.Errorf("failed to create nomad API client: %w", err)
 	}
 
 	pool.GoCtx(func(routineCtx context.Context) {
-		ctxLog := log.With(routineCtx, log.Str(log.ProviderName, providerName))
-		logger := log.FromContext(ctxLog)
+		logger := log.Ctx(routineCtx).With().Str(logs.ProviderName, p.name).Logger()
+		ctxLog := logger.WithContext(routineCtx)
 
 		operation := func() error {
 			ctx, cancel := context.WithCancel(ctxLog)
@@ -133,7 +208,7 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 		}
 
 		failure := func(err error, d time.Duration) {
-			logger.Errorf("Provider connection error %+v, retrying in %s", err, d)
+			logger.Error().Err(err).Msgf("Provider connection error, retrying in %s", d)
 		}
 
 		if retryErr := backoff.RetryNotify(
@@ -141,7 +216,7 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 			backoff.WithContext(job.NewBackOff(backoff.NewExponentialBackOff()), ctxLog),
 			failure,
 		); retryErr != nil {
-			logger.Errorf("Cannot connect to Nomad server %+v", retryErr)
+			logger.Error().Err(retryErr).Msg("Cannot connect to Nomad server")
 		}
 	})
 
@@ -149,55 +224,26 @@ func (p *Provider) Provide(configurationChan chan<- dynamic.Message, pool *safe.
 }
 
 func (p *Provider) loadConfiguration(ctx context.Context, configurationC chan<- dynamic.Message) error {
-	items, err := p.getNomadServiceData(ctx)
-	if err != nil {
-		return err
+	var items []item
+	var err error
+	if p.AllowEmptyServices {
+		items, err = p.getNomadServiceDataWithEmptyServices(ctx)
+		if err != nil {
+			return err
+		}
+	} else {
+		items, err = p.getNomadServiceData(ctx)
+		if err != nil {
+			return err
+		}
 	}
+
 	configurationC <- dynamic.Message{
-		ProviderName:  providerName,
+		ProviderName:  p.name,
 		Configuration: p.buildConfig(ctx, items),
 	}
 
 	return nil
-}
-
-func createClient(namespace string, endpoint *EndpointConfig) (*api.Client, error) {
-	config := api.Config{
-		Address:   endpoint.Address,
-		Namespace: namespace,
-		Region:    endpoint.Region,
-		SecretID:  endpoint.Token,
-		WaitTime:  time.Duration(endpoint.EndpointWaitTime),
-	}
-
-	if endpoint.TLS != nil {
-		config.TLSConfig = &api.TLSConfig{
-			CACert:     endpoint.TLS.CA,
-			ClientCert: endpoint.TLS.Cert,
-			ClientKey:  endpoint.TLS.Key,
-			Insecure:   endpoint.TLS.InsecureSkipVerify,
-		}
-	}
-
-	return api.NewClient(&config)
-}
-
-// configuration contains information from the service's tags that are globals
-// (not specific to the dynamic configuration).
-type configuration struct {
-	Enable bool // <prefix>.enable
-}
-
-// globalConfig returns a configuration with settings not specific to the dynamic configuration (i.e. "<prefix>.enable").
-func (p *Provider) globalConfig(tags []string) configuration {
-	enabled := p.ExposedByDefault
-	labels := tagsToLabels(tags, p.Prefix)
-
-	if v, exists := labels["traefik.enable"]; exists {
-		enabled = strings.EqualFold(v, "true")
-	}
-
-	return configuration{Enable: enabled}
 }
 
 func (p *Provider) getNomadServiceData(ctx context.Context) ([]item, error) {
@@ -214,22 +260,22 @@ func (p *Provider) getNomadServiceData(ctx context.Context) ([]item, error) {
 
 	for _, stub := range stubs {
 		for _, service := range stub.Services {
-			logger := log.FromContext(log.With(ctx, log.Str("serviceName", service.ServiceName)))
+			logger := log.Ctx(ctx).With().Str("serviceName", service.ServiceName).Logger()
 
-			globalCfg := p.globalConfig(service.Tags)
-			if !globalCfg.Enable {
-				logger.Debug("Filter Nomad service that is not enabled")
+			extraConf := p.getExtraConf(service.Tags)
+			if !extraConf.Enable {
+				logger.Debug().Msg("Filter Nomad service that is not enabled")
 				continue
 			}
 
 			matches, err := constraints.MatchTags(service.Tags, p.Constraints)
 			if err != nil {
-				logger.Errorf("Error matching constraint expressions: %v", err)
+				logger.Error().Err(err).Msg("Error matching constraint expressions")
 				continue
 			}
 
 			if !matches {
-				logger.Debugf("Filter Nomad service not matching constraints: %q", p.Constraints)
+				logger.Debug().Msgf("Filter Nomad service not matching constraints: %q", p.Constraints)
 				continue
 			}
 
@@ -248,13 +294,122 @@ func (p *Provider) getNomadServiceData(ctx context.Context) ([]item, error) {
 					Address:    i.Address,
 					Port:       i.Port,
 					Tags:       i.Tags,
-					ExtraConf:  p.globalConfig(i.Tags),
+					ExtraConf:  p.getExtraConf(i.Tags),
 				})
 			}
 		}
 	}
 
 	return items, nil
+}
+
+func (p *Provider) getNomadServiceDataWithEmptyServices(ctx context.Context) ([]item, error) {
+	jobsOpts := &api.QueryOptions{AllowStale: p.Stale}
+	jobsOpts = jobsOpts.WithContext(ctx)
+
+	jobStubs, _, err := p.client.Jobs().List(jobsOpts)
+	if err != nil {
+		return nil, err
+	}
+
+	var items []item
+
+	// Get Services even when they are scaled down to zero. Currently the nomad service interface does not support this. https://github.com/hashicorp/nomad/issues/19731
+	for _, jobStub := range jobStubs {
+		jobInfoOpts := &api.QueryOptions{}
+		jobInfoOpts = jobInfoOpts.WithContext(ctx)
+
+		job, _, err := p.client.Jobs().Info(jobStub.ID, jobInfoOpts)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, taskGroup := range job.TaskGroups {
+			services := []*api.Service{}
+			// Get all services in job -> taskgroup
+			services = append(services, taskGroup.Services...)
+
+			// Get all services in job -> taskgroup -> tasks
+			for _, task := range taskGroup.Tasks {
+				services = append(services, task.Services...)
+			}
+
+			for _, service := range services {
+				logger := log.Ctx(ctx).With().Str("serviceName", service.TaskName).Logger()
+
+				extraConf := p.getExtraConf(service.Tags)
+				if !extraConf.Enable {
+					logger.Debug().Msg("Filter Nomad service that is not enabled")
+					continue
+				}
+
+				matches, err := constraints.MatchTags(service.Tags, p.Constraints)
+				if err != nil {
+					logger.Error().Err(err).Msg("Error matching constraint expressions")
+					continue
+				}
+
+				if !matches {
+					logger.Debug().Msgf("Filter Nomad service not matching constraints: %q", p.Constraints)
+					continue
+				}
+
+				if nil != taskGroup.Scaling && *taskGroup.Scaling.Enabled && *taskGroup.Count == 0 {
+					// Add items without address
+					items = append(items, item{
+						// Create a unique id for non registered services
+						ID:         fmt.Sprintf("%s-%s-%s-%s-%s", *job.Namespace, *job.Name, *taskGroup.Name, service.TaskName, service.Name),
+						Name:       service.Name,
+						Namespace:  *job.Namespace,
+						Node:       "",
+						Datacenter: "",
+						Address:    "",
+						Port:       -1,
+						Tags:       service.Tags,
+						ExtraConf:  p.getExtraConf(service.Tags),
+					})
+				} else {
+					instances, err := p.fetchService(ctx, service.Name)
+					if err != nil {
+						return nil, err
+					}
+
+					for _, i := range instances {
+						items = append(items, item{
+							ID:         i.ID,
+							Name:       i.ServiceName,
+							Namespace:  i.Namespace,
+							Node:       i.NodeID,
+							Datacenter: i.Datacenter,
+							Address:    i.Address,
+							Port:       i.Port,
+							Tags:       i.Tags,
+							ExtraConf:  p.getExtraConf(i.Tags),
+						})
+					}
+				}
+			}
+		}
+	}
+
+	return items, nil
+}
+
+// getExtraConf returns a configuration with settings which are not part of the dynamic configuration (e.g. "<prefix>.enable").
+func (p *Provider) getExtraConf(tags []string) configuration {
+	labels := tagsToLabels(tags, p.Prefix)
+
+	enabled := p.ExposedByDefault
+	if v, exists := labels["traefik.enable"]; exists {
+		enabled = strings.EqualFold(v, "true")
+	}
+
+	var canary bool
+	if v, exists := labels["traefik.nomad.canary"]; exists {
+		canary = strings.EqualFold(v, "true")
+	}
+
+	return configuration{Enable: enabled, Canary: canary}
 }
 
 // fetchService queries Nomad API for services matching name,
@@ -276,4 +431,25 @@ func (p *Provider) fetchService(ctx context.Context, name string) ([]*api.Servic
 		return nil, fmt.Errorf("failed to fetch services: %w", err)
 	}
 	return services, nil
+}
+
+func createClient(namespace string, endpoint *EndpointConfig) (*api.Client, error) {
+	config := api.Config{
+		Address:   endpoint.Address,
+		Namespace: namespace,
+		Region:    endpoint.Region,
+		SecretID:  endpoint.Token,
+		WaitTime:  time.Duration(endpoint.EndpointWaitTime),
+	}
+
+	if endpoint.TLS != nil {
+		config.TLSConfig = &api.TLSConfig{
+			CACert:     endpoint.TLS.CA,
+			ClientCert: endpoint.TLS.Cert,
+			ClientKey:  endpoint.TLS.Key,
+			Insecure:   endpoint.TLS.InsecureSkipVerify,
+		}
+	}
+
+	return api.NewClient(&config)
 }

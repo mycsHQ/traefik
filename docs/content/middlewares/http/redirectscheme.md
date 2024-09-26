@@ -13,7 +13,6 @@ TODO: add schema
 -->
 
 The RedirectScheme middleware redirects the request if the request scheme is different from the configured scheme.
-The middleware does not work for websocket requests. 
 
 !!! warning "When behind another reverse-proxy"
 
@@ -26,7 +25,7 @@ The middleware does not work for websocket requests.
 
 ## Configuration Examples
 
-```yaml tab="Docker"
+```yaml tab="Docker & Swarm"
 # Redirect to https
 labels:
   - "traefik.http.middlewares.test-redirectscheme.redirectscheme.scheme=https"
@@ -35,7 +34,7 @@ labels:
 
 ```yaml tab="Kubernetes"
 # Redirect to https
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: test-redirectscheme
@@ -46,20 +45,6 @@ spec:
 ```
 
 ```yaml tab="Consul Catalog"
-# Redirect to https
-labels:
-  - "traefik.http.middlewares.test-redirectscheme.redirectscheme.scheme=https"
-  - "traefik.http.middlewares.test-redirectscheme.redirectscheme.permanent=true"
-```
-
-```json tab="Marathon"
-"labels": {
-  "traefik.http.middlewares.test-redirectscheme.redirectscheme.scheme": "https"
-  "traefik.http.middlewares.test-redirectscheme.redirectscheme.permanent": "true"
-}
-```
-
-```yaml tab="Rancher"
 # Redirect to https
 labels:
   - "traefik.http.middlewares.test-redirectscheme.redirectscheme.scheme=https"
@@ -90,7 +75,7 @@ http:
 
 Set the `permanent` option to `true` to apply a permanent redirection.
 
-```yaml tab="Docker"
+```yaml tab="Docker & Swarm"
 # Redirect to https
 labels:
   # ...
@@ -99,7 +84,7 @@ labels:
 
 ```yaml tab="Kubernetes"
 # Redirect to https
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: test-redirectscheme
@@ -110,20 +95,6 @@ spec:
 ```
 
 ```yaml tab="Consul Catalog"
-# Redirect to https
-labels:
-  # ...
-  - "traefik.http.middlewares.test-redirectscheme.redirectscheme.permanent=true"
-```
-
-```json tab="Marathon"
-"labels": {
-
-  "traefik.http.middlewares.test-redirectscheme.redirectscheme.permanent": "true"
-}
-```
-
-```yaml tab="Rancher"
 # Redirect to https
 labels:
   # ...
@@ -152,7 +123,7 @@ http:
 
 The `scheme` option defines the scheme of the new URL.
 
-```yaml tab="Docker"
+```yaml tab="Docker & Swarm"
 # Redirect to https
 labels:
   - "traefik.http.middlewares.test-redirectscheme.redirectscheme.scheme=https"
@@ -160,7 +131,7 @@ labels:
 
 ```yaml tab="Kubernetes"
 # Redirect to https
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: test-redirectscheme
@@ -170,18 +141,6 @@ spec:
 ```
 
 ```yaml tab="Consul Catalog"
-# Redirect to https
-labels:
-  - "traefik.http.middlewares.test-redirectscheme.redirectscheme.scheme=https"
-```
-
-```json tab="Marathon"
-"labels": {
-  "traefik.http.middlewares.test-redirectscheme.redirectscheme.scheme": "https"
-}
-```
-
-```yaml tab="Rancher"
 # Redirect to https
 labels:
   - "traefik.http.middlewares.test-redirectscheme.redirectscheme.scheme=https"
@@ -207,7 +166,7 @@ http:
 
 The `port` option defines the port of the new URL.
 
-```yaml tab="Docker"
+```yaml tab="Docker & Swarm"
 # Redirect to https
 labels:
   # ...
@@ -216,7 +175,7 @@ labels:
 
 ```yaml tab="Kubernetes"
 # Redirect to https
-apiVersion: traefik.containo.us/v1alpha1
+apiVersion: traefik.io/v1alpha1
 kind: Middleware
 metadata:
   name: test-redirectscheme
@@ -227,20 +186,6 @@ spec:
 ```
 
 ```yaml tab="Consul Catalog"
-# Redirect to https
-labels:
-  # ...
-  - "traefik.http.middlewares.test-redirectscheme.redirectscheme.port=443"
-```
-
-```json tab="Marathon"
-"labels": {
-
-  "traefik.http.middlewares.test-redirectscheme.redirectscheme.port": "443"
-}
-```
-
-```yaml tab="Rancher"
 # Redirect to https
 labels:
   # ...

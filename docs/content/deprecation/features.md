@@ -2,25 +2,19 @@
 
 This page is maintained and updated periodically to reflect our roadmap and any decisions around feature deprecation.
 
-| Feature                                                       | Deprecated | End of Support | Removal |
-|---------------------------------------------------------------|------------|----------------|---------|
-| [Pilot Dashboard (Metrics)](#pilot-dashboard-metrics)         | 2.7        | 2.8            | 2.9     |
-| [Pilot Plugins](#pilot-plugins)                               | 2.7        | 2.8            | 2.9     |
-| [Consul Enterprise Namespaces](#consul-enterprise-namespaces) | 2.8        | TBD            | TBD     |
+| Feature                                                                                                              | Deprecated | End of Support | Removal |
+|----------------------------------------------------------------------------------------------------------------------|------------|----------------|---------|
+| [Kubernetes Ingress API Version `networking.k8s.io/v1beta1`](#kubernetes-ingress-api-version-networkingk8siov1beta1) | N/A        | N/A            | 3.0     |
+| [CRD API Version `apiextensions.k8s.io/v1beta1`](#kubernetes-ingress-api-version-networkingk8siov1beta1)             | N/A        | N/A            | 3.0     |
 
 ## Impact
 
-### Pilot Dashboard (Metrics)
+### Kubernetes Ingress API Version `networking.k8s.io/v1beta1`
 
-Metrics will continue to function normally up to 2.8, when they will be disabled.  
-In 2.9, the Pilot platform and all Traefik integration code will be permanently removed.
+The Kubernetes Ingress API Version `networking.k8s.io/v1beta1` support is removed in v3. 
+Please use the API Group `networking.k8s.io/v1` instead.
 
-### Pilot Plugins 
+### Traefik CRD Definitions API Version `apiextensions.k8s.io/v1beta1`
 
-Starting on 2.7 the pilot token will not be a requirement anymore.  
-At 2.9, a new plugin catalog home should be available, decoupled from pilot.
-
-### Consul Enterprise Namespaces
-
-Starting on 2.8 the `namespace` option of Consul and Consul Catalog providers is deprecated, 
-please use the `namespaces` options instead.  
+The Traefik CRD definitions API Version `apiextensions.k8s.io/v1beta1` support is removed in v3.
+Please use the API Group `apiextensions.k8s.io/v1` instead.
